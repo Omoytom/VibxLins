@@ -1,0 +1,9 @@
+﻿fastapi==0.110.0
+uvicorn[standard]
+transformers
+torch
+websockets
+python-dotenv
+polars
+redis
+pydantic-ai
