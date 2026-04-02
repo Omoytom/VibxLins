@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VibeLine Pulse</title>
+    <style>
+        :root {
+            --bg-color: #0f172a;
+            --text-main: #f8fafc;
+            --hype-color: #10b981; /* Neon Green */
+            --salt-color: #ef4444; /* Neon Red */
+            --neutral-color: #64748b;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        /* The Vibe Meter */
+        .meter-container {
+            width: 100%;
+            max-width: 600px;
+            background: #1e293b;
+            border-radius: 20px;
+            padding: 20px;
+            text-align: center;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.5);
+            margin-bottom: 20px;
+        }
+
+        .meter-bar {
+            width: 100%;
+            height: 30px;
+            background: #334155;
+            border-radius: 15px;
+            overflow: hidden;
+            position: relative;
+            margin-top: 15px;
+        }
+
+        .meter-fill {
+            height: 100%;
+            width: 50%; /* Starts in the middle (Neutral) */
+            background: var(--neutral-color);
+            border-radius: 15px;
+            transition: width 0.3s ease, background-color 0.3s ease;
+        }
+
+        .score-display {
+            font-size: 2rem;
+            font-weight: bold;
+            margin-top: 10px;
+        }
+
+        /* The Chat Feed */
+        .chat-container {
+            width: 100%;
+            max-width: 600px;
+            flex-grow: 1;
+            background: #1e293b;
+            border-radius: 20px;
+            padding: 20px;
+            overflow-y: auto;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.5);
+        }
+
+        .chat-message {
+            padding: 10px;
+            border-bottom: 1px solid #334155;
+            display: flex;
+            justify-content: space-between;
+            animation: slideIn 0.3s ease-out;
+        }
+
+        .badge {
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 0.8rem;
+            font-weight: bold;
+        }
+
+        .badge.hype { background: rgba(16, 185, 129, 0.2); color: var(--hype-color); }
+        .badge.salt { background: rgba(239, 68, 68, 0.2); color: var(--salt-color); }
+        .badge.neutral { background: rgba(100, 116, 139, 0.2); color: var(--neutral-color); }
+
+        @keyframes slideIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+    </style>
+</head>
+<body>
+
+    <div class="meter-container">
+        <h2>Live Community Vibe</h2>
+        <div class="meter-bar">
+            <div class="meter-fill" id="vibe-fill"></div>
+        </div>
+        <div class="score-display" id="vibe-score">Neutral (0.00)</div>
+    </div>
+
+    <div class="chat-container" id="chat-feed">
+        </div>
+
+    <script>
+        // Connect to our FastAPI WebSocket
+        const ws = new window.WebSocket("ws://localhost:8000/ws/pulse");
+        
+        const chatFeed = document.getElementById('chat-feed');
+        const vibeFill = document.getElementById('vibe-fill');
+        const vibeScoreText = document.getElementById('vibe-score');
+
+        // Keep a rolling average of the last 10 scores to smooth the meter
+        let recentScores = [];
+
+        ws.onmessage = function(event) {
+            const data = JSON.parse(event.data);
+            
+            // 1. Update the Rolling Score
+            recentScores.push(data.score);
+            if (recentScores.length > 10) recentScores.shift();
+            
+            const avgScore = recentScores.reduce((a, b) => a + b, 0) / recentScores.length;
+            
+            // 2. Update the Meter Visuals
+            // Convert score (-1 to 1) to a percentage (0% to 100%)
+            const percentage = ((avgScore + 1) / 2) * 100;
+            vibeFill.style.width = `${percentage}%`;
+
+            if (avgScore > 0.2) {
+                vibeFill.style.backgroundColor = 'var(--hype-color)';
+                vibeScoreText.innerText = `🔥 HYPE (${avgScore.toFixed(2)})`;
+                vibeScoreText.style.color = 'var(--hype-color)';
+            } else if (avgScore < -0.2) {
+                vibeFill.style.backgroundColor = 'var(--salt-color)';
+                vibeScoreText.innerText = `💀 SALT (${avgScore.toFixed(2)})`;
+                vibeScoreText.style.color = 'var(--salt-color)';
+            } else {
+                vibeFill.style.backgroundColor = 'var(--neutral-color)';
+                vibeScoreText.innerText = `😐 NEUTRAL (${avgScore.toFixed(2)})`;
+                vibeScoreText.style.color = 'var(--text-main)';
+            }
+
+            // 3. Add Message to Chat Feed
+            const msgDiv = document.createElement('div');
+            msgDiv.className = 'chat-message';
+            
+            let badgeClass = 'neutral';
+            let badgeText = 'NEUTRAL';
+            if (data.score > 0.4) { badgeClass = 'hype'; badgeText = 'HYPE'; }
+            else if (data.score < -0.4) { badgeClass = 'salt'; badgeText = 'SALT'; }
+
+            msgDiv.innerHTML = `
+                <span><strong>${data.username}</strong>: ${data.message}</span>
+                <span class="badge ${badgeClass}">${badgeText}</span>
+            `;
+            
+            // Add to top and keep max 50 messages
+            chatFeed.insertBefore(msgDiv, chatFeed.firstChild);
+            if (chatFeed.children.length > 50) {
+                chatFeed.removeChild(chatFeed.lastChild);
+            }
+        };
+
+        ws.onopen = () => console.log("Connected to VibeLine Engine 🟢");
+        ws.onclose = () => console.log("Disconnected 🔴");
+    </script>
+</body>
+</html>

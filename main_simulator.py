@@ -3,12 +3,14 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
-from src.ingestion.twitch_listner import run_twitch_listener
+from src.ingestion.simulator import run_simulator
 from src.processing.engine import VibeEngine
 
+# Initialize the Web App and AI Engine
 app = FastAPI(title="VibeLine API")
 engine = VibeEngine()
 
+# Allow connections from any browser or OBS source
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -17,6 +19,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# --- WebSocket Manager ---
+# This keeps track of whoever is viewing the dashboard (e.g., OBS)
 class ConnectionManager:
     def __init__(self):
         self.active_connections: list[WebSocket] = []
@@ -39,12 +43,18 @@ class ConnectionManager:
 manager = ConnectionManager()
 chat_queue = asyncio.Queue()
 
+# --- Background Tasks ---
 async def process_chat_pipeline():
+    """Reads from the simulator, analyzes sentiment, and broadcasts to the UI."""
     print("📡 [Pipeline] AI Processing loop started...")
     while True:
+        # 1. Get raw message from simulator
         chat_data = await chat_queue.get()
-        score = await asyncio.to_thread(engine.analyze_vibe, chat_data['message'])
         
+        # 2. Analyze the vibe
+        score = engine.analyze_vibe(chat_data['message'])
+        
+        # 3. Create the "Pulse Payload"
         payload = {
             "username": chat_data["username"],
             "message": chat_data["message"],
@@ -52,44 +62,39 @@ async def process_chat_pipeline():
             "timestamp": chat_data["timestamp"]
         }
         
+        # Print to console so you can watch it run
         status = "🔥 HYPE" if score > 0.4 else "💀 SALT" if score < -0.4 else "😐 NEUTRAL"
         print(f"{chat_data['username']:<15} | {status:<8} | Score: {score:>6.2f} | {chat_data['message']}")
         
+        # 4. Broadcast to OBS/Browser
         await manager.broadcast(payload)
         chat_queue.task_done()
 
-# 👇 THE FIX: Create a "safe" place to store our tasks
-active_tasks = set()
-
+# --- FastAPI Lifecycle Events ---
 @app.on_event("startup")
 async def startup_event():
-    TARGET_CHANNEL = "summit1g" 
-    
-    # Create the tasks
-    t1 = asyncio.create_task(run_twitch_listener(chat_queue, TARGET_CHANNEL))
-    t2 = asyncio.create_task(process_chat_pipeline())
-    
-    # Add them to our "safe" set so Python doesn't delete them
-    active_tasks.add(t1)
-    active_tasks.add(t2)
-    
-    # Tell Python it's okay to delete them ONLY when they finish
-    t1.add_done_callback(active_tasks.discard)
-    t2.add_done_callback(active_tasks.discard)
+    """Starts the simulator and pipeline when the server boots up."""
+    asyncio.create_task(run_simulator(chat_queue))
+    asyncio.create_task(process_chat_pipeline())
 
+# --- API Endpoints ---
 @app.get("/")
 def read_root():
-    return {"status": "VibeLine Server is Running!"}
+    return {"status": "VibeLine Server is Running! Connect your frontend to /ws/pulse for real-time data."}
 
 @app.websocket("/ws/pulse")
 async def websocket_endpoint(websocket: WebSocket):
+    """The endpoint that OBS/Browsers will connect to."""
     await manager.connect(websocket)
     try:
         while True:
+            # Keep the connection open to push data
             await websocket.receive_text() 
     except WebSocketDisconnect:
         manager.disconnect(websocket)
         print("🔌 Client disconnected.")
 
+# --- Runner ---
 if __name__ == "__main__":
+    # Run the server on port 8000
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
