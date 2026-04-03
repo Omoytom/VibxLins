@@ -52,7 +52,7 @@ async def process_chat_pipeline():
             "timestamp": chat_data["timestamp"]
         }
         
-        status = "🔥 HYPE" if score > 0.4 else "💀 SALT" if score < -0.4 else "😐 NEUTRAL"
+        status = "🟢 POSITIVE" if score > 0.4 else "🔴 NEGATIVE" if score < -0.4 else "⚪ NEUTRAL"
         print(f"{chat_data['username']:<15} | {status:<8} | Score: {score:>6.2f} | {chat_data['message']}")
         
         await manager.broadcast(payload)
@@ -63,8 +63,7 @@ active_tasks = set()
 
 @app.on_event("startup")
 async def startup_event():
-    TARGET_CHANNEL = "summit1g" 
-    
+    TARGET_CHANNEL = "xQc"
     # Create the tasks
     t1 = asyncio.create_task(run_twitch_listener(chat_queue, TARGET_CHANNEL))
     t2 = asyncio.create_task(process_chat_pipeline())
