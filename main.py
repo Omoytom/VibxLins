@@ -9,21 +9,38 @@ from src.processing.engine import VibeEngine
 app = FastAPI(title="VibeLine API")
 engine = VibeEngine()
 
+# SECURITY: Restrict which domains can connect to your backend
+# Replace with your actual frontend domain when you deploy to production
+ALLOWED_ORIGINS = [
+    "http://localhost:5500",  # Common for VS Code Live Server
+    "http://127.0.0.1:5500",
+    "http://localhost:8000",
+    "http://127.0.0.1:8000"
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST"], # Only allow specific methods instead of ["*"]
     allow_headers=["*"],
 )
 
 class ConnectionManager:
     def __init__(self):
         self.active_connections: list[WebSocket] = []
+        self.max_connections = 10 #  SECURITY: Hard limit to prevent DDoS
 
     async def connect(self, websocket: WebSocket):
+        if len(self.active_connections) >= self.max_connections:
+            # Code 1008 means "Policy Violation"
+            await websocket.close(code=1008) 
+            print(" [Security] Connection rejected: Max capacity reached.")
+            return False
+            
         await websocket.accept()
         self.active_connections.append(websocket)
+        return True
 
     def disconnect(self, websocket: WebSocket):
         if websocket in self.active_connections:
@@ -58,7 +75,7 @@ async def process_chat_pipeline():
         await manager.broadcast(payload)
         chat_queue.task_done()
 
-# 👇 THE FIX: Create a "safe" place to store our tasks
+
 active_tasks = set()
 
 @app.on_event("startup")
@@ -82,7 +99,12 @@ def read_root():
 
 @app.websocket("/ws/pulse")
 async def websocket_endpoint(websocket: WebSocket):
-    await manager.connect(websocket)
+    # Check if the connection was allowed
+    is_connected = await manager.connect(websocket)
+    
+    if not is_connected:
+        return # Kill the process if max capacity is reached
+        
     try:
         while True:
             await websocket.receive_text() 

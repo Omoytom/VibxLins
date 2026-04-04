@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VibeLine Pulse</title>
+    <title>VibxLinx Pulse</title>
     <style>
         :root {
             --bg-color: #0f172a;
@@ -104,11 +104,12 @@
         <div class="meter-bar">
             <div class="meter-fill" id="vibe-fill"></div>
         </div>
+        <!-- FIXED TYPO: id="vibx-score" is now "vibe-score" to match the JavaScript -->
         <div class="score-display" id="vibe-score">⚪ NEUTRAL (0.00)</div>
     </div>
 
     <div class="chat-container" id="chat-feed">
-        </div>
+    </div>
 
     <script>
         const ws = new window.WebSocket("ws://localhost:8000/ws/pulse");
@@ -117,6 +118,13 @@
         const vibeScoreText = document.getElementById('vibe-score');
 
         let recentScores = [];
+        
+        // 🛡️ SECURITY (STEP A): Escape HTML characters to prevent XSS attacks
+        function escapeHTML(str) {
+            const div = document.createElement('div');
+            div.textContent = str;
+            return div.innerHTML;
+        }
 
         ws.onmessage = function(event) {
             const data = JSON.parse(event.data);
@@ -151,8 +159,9 @@
             if (data.score > 0.4) { badgeClass = 'positive'; badgeText = 'POSITIVE'; }
             else if (data.score < -0.4) { badgeClass = 'negative'; badgeText = 'NEGATIVE'; }
 
+            // 🛡️ SECURITY (STEP B): Wrapped data.username and data.message in escapeHTML()
             msgDiv.innerHTML = `
-                <span><strong>${data.username}</strong>: ${data.message}</span>
+                <span><strong>${escapeHTML(data.username)}</strong>: ${escapeHTML(data.message)}</span>
                 <span class="badge ${badgeClass}">${badgeText}</span>
             `;
             
