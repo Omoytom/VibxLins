@@ -112,7 +112,9 @@
     </div>
 
     <script>
-        const ws = new window.WebSocket("ws://localhost:8000/ws/pulse");
+        // We will update this exact URL once Render gives us our backend server name
+        const ws = new window.WebSocket("wss://vibxlinx-backend.onrender.com/ws/pulse");
+
         const chatFeed = document.getElementById('chat-feed');
         const vibeFill = document.getElementById('vibe-fill');
         const vibeScoreText = document.getElementById('vibe-score');

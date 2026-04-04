@@ -15,7 +15,8 @@ ALLOWED_ORIGINS = [
     "http://localhost:5500",  # Common for VS Code Live Server
     "http://127.0.0.1:5500",
     "http://localhost:8000",
-    "http://127.0.0.1:8000"
+    "http://127.0.0.1:8000",
+    "https://Omoytom.github.io"
 ]
 
 app.add_middleware(
