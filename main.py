@@ -1,5 +1,5 @@
 import asyncio
-import httpx # New import for the serverless API
+import httpx 
 import os 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -20,7 +20,7 @@ ALLOWED_ORIGINS = [
     "http://127.0.0.1:5500",
     "http://localhost:8000",
     "http://127.0.0.1:8000",
-    "https://omoytom.github.io" # Added your GitHub Pages URL so the cloud frontend can connect
+    "https://omoytom.github.io" 
 ]
 
 app.add_middleware(
@@ -38,7 +38,6 @@ class ConnectionManager:
 
     async def connect(self, websocket: WebSocket):
         if len(self.active_connections) >= self.max_connections:
-            # Code 1008 means "Policy Violation"
             await websocket.close(code=1008) 
             print("🚨 [Security] Connection rejected: Max capacity reached.")
             return False
@@ -61,45 +60,43 @@ class ConnectionManager:
 manager = ConnectionManager()
 chat_queue = asyncio.Queue()
 
-# 🔄 DYNAMIC CHANNEL TRACKERS
+
 active_bot_task = None
 current_bot_channel = None
 
-# 🧠 NEW SERVERLESS AI FUNCTION
+# 🌐 GLOBAL HTTP CLIENT (Saves RAM by reusing one connection)
+http_client = httpx.AsyncClient()
+
 # 🧠 UPGRADED SERVERLESS AI FUNCTION
 async def analyze_sentiment(text: str):
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                MODEL_URL, 
-                headers=headers, 
-                json={"inputs": text},
-                timeout=10.0 
-            )
-            data = response.json()
-            
-            # print(f"🕵️ RAW API DATA: {data}")
-            
-            if isinstance(data, dict):
-                if "error" in data:
-                    print(f" Hugging Face API Status: {data['error']}")
-                return 0.0 
+        response = await http_client.post(
+            MODEL_URL, 
+            headers=headers, 
+            json={"inputs": text},
+            timeout=5.0 # Shorter timeout prevents traffic jams
+        )
+        data = response.json()
+        
+        if isinstance(data, dict):
+            if "error" in data:
+                print(f"⚠️ Hugging Face API Status: {data['error']}")
+            return 0.0 
 
-            # Extract the sentiment from the HF API response format
-            if isinstance(data, list) and len(data) > 0:
-                predictions = data[0] if isinstance(data[0], list) else data
-                best_match = max(predictions, key=lambda x: x['score'])
-                
-                
-                label = best_match['label'].lower()
-                
-                # Convert to our numerical score (-1.0 to 1.0)
-                if label == 'positive': return best_match['score']
-                elif label == 'negative': return -best_match['score']
-                else: return 0.0 
+        # Extract the sentiment from the HF API response format
+        if isinstance(data, list) and len(data) > 0:
+            predictions = data[0] if isinstance(data[0], list) else data
+            best_match = max(predictions, key=lambda x: x['score'])
+            
+            label = best_match['label'].lower()
+            
+            # Convert to our numerical score (-1.0 to 1.0)
+            if label == 'positive': return best_match['score']
+            elif label == 'negative': return -best_match['score']
+            else: return 0.0 
                 
     except Exception as e:
-        print(f"Network/Exception Error: {e}")
+        print(f"⚠️ Network/Exception Error: {e}")
         return 0.0 
         
     return 0.0
@@ -107,9 +104,16 @@ async def analyze_sentiment(text: str):
 async def process_chat_pipeline():
     print("📡 [Pipeline] Serverless AI Processing loop started...")
     while True:
+        if chat_queue.qsize() > 50:
+            print(f"🧹 Queue too large ({chat_queue.qsize()}). Dropping old messages to save memory...")
+            while chat_queue.qsize() > 10:
+                try:
+                    chat_queue.get_nowait()
+                    chat_queue.task_done()
+                except asyncio.QueueEmpty:
+                    break
+
         chat_data = await chat_queue.get()
-        
-        # Swapped local engine for the API call
         score = await analyze_sentiment(chat_data['message']) 
         
         payload = {
@@ -129,8 +133,6 @@ active_tasks = set()
 
 @app.on_event("startup")
 async def startup_event():
-     
-    
     t2 = asyncio.create_task(process_chat_pipeline())
     active_tasks.add(t2)
     t2.add_done_callback(active_tasks.discard)
@@ -141,27 +143,22 @@ def read_root():
 
 @app.websocket("/ws/pulse")
 async def websocket_endpoint(websocket: WebSocket, channel: str = "eslcs"):
-    # Tell Python we want to modify those global variables we made earlier
     global active_bot_task, current_bot_channel
     
-    # Check if the connection was allowed
     is_connected = await manager.connect(websocket)
     
     if not is_connected:
-        return # Kill the process if max capacity is reached
+        return 
         
     print(f"🔗 Client connected. Requested channel: #{channel}")
     
-    # THE MAGIC: If the bot isn't running, or is on the wrong channel, switch it!
     if channel != current_bot_channel:
-        print(f" Switching Twitch bot to listen to #{channel}...")
+        print(f"🔄 Switching Twitch bot to listen to #{channel}...")
         if active_bot_task:
-            active_bot_task.cancel() # Kill the old Twitch connection
+            active_bot_task.cancel() 
         
-        # Start the new Twitch connection
         current_bot_channel = channel
         active_bot_task = asyncio.create_task(run_twitch_listener(chat_queue, channel))
-        
         
         active_tasks.add(active_bot_task)
         active_bot_task.add_done_callback(active_tasks.discard)
