@@ -11,7 +11,7 @@ app = FastAPI(title="VibeLine API")
 
 # ☁️ SERVERLESS AI CONFIGURATION
 HF_API_TOKEN = os.getenv("HF_API_TOKEN") 
-MODEL_URL = "https://api-inference.huggingface.co/models/cardiffnlp/twitter-roberta-base-sentiment-latest"
+MODEL_URL = "https://router.huggingface.co/hf-inference/models/cardiffnlp/twitter-roberta-base-sentiment-latest"
 headers = {"Authorization": f"Bearer {HF_API_TOKEN}"}
 
 # SECURITY: Restrict which domains can connect to your backend
