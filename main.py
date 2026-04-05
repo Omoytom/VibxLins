@@ -66,6 +66,7 @@ active_bot_task = None
 current_bot_channel = None
 
 # 🧠 NEW SERVERLESS AI FUNCTION
+# 🧠 UPGRADED SERVERLESS AI FUNCTION
 async def analyze_sentiment(text: str):
     try:
         async with httpx.AsyncClient() as client:
@@ -73,24 +74,32 @@ async def analyze_sentiment(text: str):
                 MODEL_URL, 
                 headers=headers, 
                 json={"inputs": text},
-                timeout=10.0 # Don't wait forever if HF is slow
+                timeout=10.0 
             )
             data = response.json()
             
+            
+            if isinstance(data, dict):
+                if "error" in data:
+                    print(f" Hugging Face API Status: {data['error']}")
+                return 0.0 
+
             # Extract the sentiment from the HF API response format
             if isinstance(data, list) and len(data) > 0:
-                # Handle nested lists which HF sometimes returns
                 predictions = data[0] if isinstance(data[0], list) else data
                 best_match = max(predictions, key=lambda x: x['score'])
                 
+                
+                label = best_match['label'].lower()
+                
                 # Convert to our numerical score (-1.0 to 1.0)
-                if best_match['label'] == 'positive': return best_match['score']
-                elif best_match['label'] == 'negative': return -best_match['score']
-                else: return 0.0 # Neutral
+                if label == 'positive': return best_match['score']
+                elif label == 'negative': return -best_match['score']
+                else: return 0.0 
                 
     except Exception as e:
-        print(f"⚠️ API Error (Rate Limit or Network): {e}")
-        return 0.0 # Default to neutral if the API fails so the stream doesn't crash
+        print(f"Network/Exception Error: {e}")
+        return 0.0 
         
     return 0.0
 
@@ -119,8 +128,8 @@ active_tasks = set()
 
 @app.on_event("startup")
 async def startup_event():
-    # Only start the AI processing pipeline on startup. 
-    # We will start the Twitch bot later when a client connects!
+     
+    
     t2 = asyncio.create_task(process_chat_pipeline())
     active_tasks.add(t2)
     t2.add_done_callback(active_tasks.discard)
@@ -144,7 +153,7 @@ async def websocket_endpoint(websocket: WebSocket, channel: str = "eslcs"):
     
     # THE MAGIC: If the bot isn't running, or is on the wrong channel, switch it!
     if channel != current_bot_channel:
-        print(f"🔄 Switching Twitch bot to listen to #{channel}...")
+        print(f" Switching Twitch bot to listen to #{channel}...")
         if active_bot_task:
             active_bot_task.cancel() # Kill the old Twitch connection
         
@@ -152,7 +161,7 @@ async def websocket_endpoint(websocket: WebSocket, channel: str = "eslcs"):
         current_bot_channel = channel
         active_bot_task = asyncio.create_task(run_twitch_listener(chat_queue, channel))
         
-        # Keep track of the task so Python doesn't delete it
+        
         active_tasks.add(active_bot_task)
         active_bot_task.add_done_callback(active_tasks.discard)
 
