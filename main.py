@@ -78,6 +78,7 @@ async def analyze_sentiment(text: str):
             )
             data = response.json()
             
+            print(f"🕵️ RAW API DATA: {data}")
             
             if isinstance(data, dict):
                 if "error" in data:
