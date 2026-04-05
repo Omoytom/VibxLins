@@ -1,42 +1,46 @@
 import asyncio
+import httpx # New import for the serverless API
+import os 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
 from src.ingestion.twitch_listner import run_twitch_listener
-from src.processing.engine import VibeEngine
 
 app = FastAPI(title="VibeLine API")
-engine = VibeEngine()
+
+# ☁️ SERVERLESS AI CONFIGURATION
+HF_API_TOKEN = os.getenv("HF_API_TOKEN") 
+MODEL_URL = "https://api-inference.huggingface.co/models/cardiffnlp/twitter-roberta-base-sentiment-latest"
+headers = {"Authorization": f"Bearer {HF_API_TOKEN}"}
 
 # SECURITY: Restrict which domains can connect to your backend
-# Replace with your actual frontend domain when you deploy to production
 ALLOWED_ORIGINS = [
-    "http://localhost:5500",  # Common for VS Code Live Server
+    "http://localhost:5500",  
     "http://127.0.0.1:5500",
     "http://localhost:8000",
     "http://127.0.0.1:8000",
-    "https://Omoytom.github.io"
+    "https://omoytom.github.io" # Added your GitHub Pages URL so the cloud frontend can connect
 ]
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["GET", "POST"], # Only allow specific methods instead of ["*"]
+    allow_methods=["GET", "POST"], 
     allow_headers=["*"],
 )
 
 class ConnectionManager:
     def __init__(self):
         self.active_connections: list[WebSocket] = []
-        self.max_connections = 10 #  SECURITY: Hard limit to prevent DDoS
+        self.max_connections = 10 # SECURITY: Hard limit to prevent DDoS
 
     async def connect(self, websocket: WebSocket):
         if len(self.active_connections) >= self.max_connections:
             # Code 1008 means "Policy Violation"
             await websocket.close(code=1008) 
-            print(" [Security] Connection rejected: Max capacity reached.")
+            print("🚨 [Security] Connection rejected: Max capacity reached.")
             return False
             
         await websocket.accept()
@@ -57,11 +61,46 @@ class ConnectionManager:
 manager = ConnectionManager()
 chat_queue = asyncio.Queue()
 
+# 🔄 DYNAMIC CHANNEL TRACKERS
+active_bot_task = None
+current_bot_channel = None
+
+# 🧠 NEW SERVERLESS AI FUNCTION
+async def analyze_sentiment(text: str):
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                MODEL_URL, 
+                headers=headers, 
+                json={"inputs": text},
+                timeout=10.0 # Don't wait forever if HF is slow
+            )
+            data = response.json()
+            
+            # Extract the sentiment from the HF API response format
+            if isinstance(data, list) and len(data) > 0:
+                # Handle nested lists which HF sometimes returns
+                predictions = data[0] if isinstance(data[0], list) else data
+                best_match = max(predictions, key=lambda x: x['score'])
+                
+                # Convert to our numerical score (-1.0 to 1.0)
+                if best_match['label'] == 'positive': return best_match['score']
+                elif best_match['label'] == 'negative': return -best_match['score']
+                else: return 0.0 # Neutral
+                
+    except Exception as e:
+        print(f"⚠️ API Error (Rate Limit or Network): {e}")
+        return 0.0 # Default to neutral if the API fails so the stream doesn't crash
+        
+    return 0.0
+
 async def process_chat_pipeline():
-    print("📡 [Pipeline] AI Processing loop started...")
+    print("📡 [Pipeline] Serverless AI Processing loop started...")
     while True:
         chat_data = await chat_queue.get()
-        score = await asyncio.to_thread(engine.analyze_vibe, chat_data['message'])
+        
+        # Swapped local engine for the API call
+        score = await analyze_sentiment(chat_data['message']) 
         
         payload = {
             "username": chat_data["username"],
@@ -76,36 +115,47 @@ async def process_chat_pipeline():
         await manager.broadcast(payload)
         chat_queue.task_done()
 
-
 active_tasks = set()
 
 @app.on_event("startup")
 async def startup_event():
-    TARGET_CHANNEL = "xQc"
-    # Create the tasks
-    t1 = asyncio.create_task(run_twitch_listener(chat_queue, TARGET_CHANNEL))
+    # Only start the AI processing pipeline on startup. 
+    # We will start the Twitch bot later when a client connects!
     t2 = asyncio.create_task(process_chat_pipeline())
-    
-    # Add them to our "safe" set so Python doesn't delete them
-    active_tasks.add(t1)
     active_tasks.add(t2)
-    
-    # Tell Python it's okay to delete them ONLY when they finish
-    t1.add_done_callback(active_tasks.discard)
     t2.add_done_callback(active_tasks.discard)
 
 @app.get("/")
 def read_root():
-    return {"status": "VibeLine Server is Running!"}
+    return {"status": "VibeLine Server is Running on Serverless API!"}
 
 @app.websocket("/ws/pulse")
-async def websocket_endpoint(websocket: WebSocket):
+async def websocket_endpoint(websocket: WebSocket, channel: str = "eslcs"):
+    # Tell Python we want to modify those global variables we made earlier
+    global active_bot_task, current_bot_channel
+    
     # Check if the connection was allowed
     is_connected = await manager.connect(websocket)
     
     if not is_connected:
         return # Kill the process if max capacity is reached
         
+    print(f"🔗 Client connected. Requested channel: #{channel}")
+    
+    # THE MAGIC: If the bot isn't running, or is on the wrong channel, switch it!
+    if channel != current_bot_channel:
+        print(f"🔄 Switching Twitch bot to listen to #{channel}...")
+        if active_bot_task:
+            active_bot_task.cancel() # Kill the old Twitch connection
+        
+        # Start the new Twitch connection
+        current_bot_channel = channel
+        active_bot_task = asyncio.create_task(run_twitch_listener(chat_queue, channel))
+        
+        # Keep track of the task so Python doesn't delete it
+        active_tasks.add(active_bot_task)
+        active_bot_task.add_done_callback(active_tasks.discard)
+
     try:
         while True:
             await websocket.receive_text() 

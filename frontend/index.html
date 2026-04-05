@@ -61,6 +61,13 @@
             margin-top: 10px;
         }
 
+        .channel-display {
+            font-size: 1rem;
+            color: var(--neutral-color);
+            margin-left: 10px;
+            font-weight: normal;
+        }
+
         .chat-container {
             width: 100%;
             max-width: 600px;
@@ -100,11 +107,10 @@
 <body>
 
     <div class="meter-container">
-        <h2>Live Community Vibe</h2>
+        <h2>Live Community Vibe <span class="channel-display" id="channel-name"></span></h2>
         <div class="meter-bar">
             <div class="meter-fill" id="vibe-fill"></div>
         </div>
-        <!-- FIXED TYPO: id="vibx-score" is now "vibe-score" to match the JavaScript -->
         <div class="score-display" id="vibe-score">⚪ NEUTRAL (0.00)</div>
     </div>
 
@@ -112,8 +118,17 @@
     </div>
 
     <script>
-        // We will update this exact URL once Render gives us our backend server name
-        const ws = new window.WebSocket("wss://vibxlins.onrender.com/ws/pulse");
+        // 1. Check the URL for a specific channel (e.g., ?channel=xqc)
+        const urlParams = new URLSearchParams(window.location.search);
+
+        // If they didn't provide one, default to a 24/7 channel so the gauge doesn't break
+        const targetChannel = urlParams.get('channel') || 'eslcs'; 
+
+        // Update the UI to show which channel we are monitoring
+        document.getElementById('channel-name').innerText = `#${targetChannel}`;
+
+        // 2. Connect to the WebSocket, passing the channel name to the Render server
+        const ws = new window.WebSocket(`wss://vibxlins.onrender.com/ws/pulse?channel=${targetChannel}`);
 
         const chatFeed = document.getElementById('chat-feed');
         const vibeFill = document.getElementById('vibe-fill');
@@ -173,7 +188,7 @@
             }
         };
 
-        ws.onopen = () => console.log("Connected to VibeLine Engine 🟢");
+        ws.onopen = () => console.log(`Connected to VibeLine Engine 🟢 listening to #${targetChannel}`);
         ws.onclose = () => console.log("Disconnected 🔴");
     </script>
 </body>
