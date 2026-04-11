@@ -216,7 +216,9 @@ async def websocket_endpoint(websocket: WebSocket, channel: str = "eslcs"):
             await websocket.receive_text() 
     except WebSocketDisconnect:
         manager.disconnect(websocket)
-        print("🔌 Client disconnected.")
+        print(" Client disconnected.")
+
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False)
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=False)
