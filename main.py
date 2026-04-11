@@ -9,12 +9,15 @@ from src.ingestion.twitch_listner import run_twitch_listener
 
 app = FastAPI(title="VibeLine API")
 
-# ☁️ SERVERLESS AI CONFIGURATION
+# SERVERLESS AI CONFIGURATION
 HF_API_TOKEN = os.getenv("HF_API_TOKEN") 
-MODEL_URL = "https://router.huggingface.co/hf-inference/models/cardiffnlp/twitter-roberta-base-sentiment-latest"
-headers = {"Authorization": f"Bearer {HF_API_TOKEN}"}
+HEADERS = {"Authorization": f"Bearer {HF_API_TOKEN}"}
 
-# SECURITY: Restrict which domains can connect to your backend
+# AI Model Endpoints
+SENTIMENT_URL = "https://router.huggingface.co/hf-inference/models/cardiffnlp/twitter-roberta-base-sentiment-latest"
+NER_URL = "https://router.huggingface.co/hf-inference/models/dslim/bert-base-NER"
+
+# SECURITY: Restrict which domains can connect to the backend
 ALLOWED_ORIGINS = [
     "http://localhost:5500",  
     "http://127.0.0.1:5500",
@@ -39,7 +42,7 @@ class ConnectionManager:
     async def connect(self, websocket: WebSocket):
         if len(self.active_connections) >= self.max_connections:
             await websocket.close(code=1008) 
-            print("🚨 [Security] Connection rejected: Max capacity reached.")
+            print(" [Security] Connection rejected: Max capacity reached.")
             return False
             
         await websocket.accept()
@@ -60,52 +63,91 @@ class ConnectionManager:
 manager = ConnectionManager()
 chat_queue = asyncio.Queue()
 
-
 active_bot_task = None
 current_bot_channel = None
 
-# 🌐 GLOBAL HTTP CLIENT (Saves RAM by reusing one connection)
+
 http_client = httpx.AsyncClient()
 
-# 🧠 UPGRADED SERVERLESS AI FUNCTION
-async def analyze_sentiment(text: str):
+# --- UPGRADED AI PROCESSING PIPELINE ---
+
+async def fetch_hf_inference(url: str, text: str):
+    """Generic async fetcher for Hugging Face APIs."""
     try:
         response = await http_client.post(
-            MODEL_URL, 
-            headers=headers, 
+            url, 
+            headers=HEADERS, 
             json={"inputs": text},
-            timeout=5.0 # Shorter timeout prevents traffic jams
+            timeout=5.0 
         )
         data = response.json()
         
-        if isinstance(data, dict):
-            if "error" in data:
-                print(f"⚠️ Hugging Face API Status: {data['error']}")
-            return 0.0 
-
-        # Extract the sentiment from the HF API response format
-        if isinstance(data, list) and len(data) > 0:
-            predictions = data[0] if isinstance(data[0], list) else data
-            best_match = max(predictions, key=lambda x: x['score'])
+        if isinstance(data, dict) and "error" in data:
+            print(f" API Error ({url.split('/')[-1]}): {data['error']}")
+            return None 
             
-            label = best_match['label'].lower()
-            
-            # Convert to our numerical score (-1.0 to 1.0)
-            if label == 'positive': return best_match['score']
-            elif label == 'negative': return -best_match['score']
-            else: return 0.0 
-                
+        return data
     except Exception as e:
-        print(f"⚠️ Network/Exception Error: {e}")
-        return 0.0 
+        print(f"Network Error ({url.split('/')[-1]}): {e}")
+        return None 
+
+def extract_entities(ner_raw_data) -> list:
+    """Parses raw token data from the NER model into clean entity strings."""
+    if not ner_raw_data or isinstance(ner_raw_data, dict): 
+        return []
+
+    entities = set()
+    current_entity = ""
+
+    for token_data in ner_raw_data:
+        word = token_data.get("word", "")
+        entity_type = token_data.get("entity_group", token_data.get("entity", ""))
+
+        if word.startswith("##"):
+            current_entity += word.replace("##", "")
+        elif entity_type.startswith("B-"):
+            if current_entity:
+                entities.add(current_entity)
+            current_entity = word
+        elif entity_type.startswith("I-"):
+            current_entity += f" {word}" if current_entity else word
+        else:
+            if current_entity:
+                entities.add(current_entity)
+                current_entity = ""
+                
+    if current_entity:
+        entities.add(current_entity)
+
+    return list(entities)
+
+async def analyze_message(text: str):
+    """Fires Sentiment and NER API requests concurrently."""
+    sentiment_task = fetch_hf_inference(SENTIMENT_URL, text)
+    ner_task = fetch_hf_inference(NER_URL, text)
+    
+    sentiment_raw, ner_raw = await asyncio.gather(sentiment_task, ner_task)
+    
+    # 1. Parse Sentiment
+    score = 0.0
+    if sentiment_raw and isinstance(sentiment_raw, list) and len(sentiment_raw) > 0:
+        predictions = sentiment_raw[0] if isinstance(sentiment_raw[0], list) else sentiment_raw
+        best_match = max(predictions, key=lambda x: x['score'])
+        label = best_match['label'].lower()
         
-    return 0.0
+        if label == 'positive': score = best_match['score']
+        elif label == 'negative': score = -best_match['score']
+    
+    # 2. Parse Entities
+    entities = extract_entities(ner_raw)
+    
+    return score, entities
 
 async def process_chat_pipeline():
     print("📡 [Pipeline] Serverless AI Processing loop started...")
     while True:
         if chat_queue.qsize() > 50:
-            print(f"🧹 Queue too large ({chat_queue.qsize()}). Dropping old messages to save memory...")
+            print(f" Queue too large ({chat_queue.qsize()}). Dropping old messages to save memory...")
             while chat_queue.qsize() > 10:
                 try:
                     chat_queue.get_nowait()
@@ -114,17 +156,23 @@ async def process_chat_pipeline():
                     break
 
         chat_data = await chat_queue.get()
-        score = await analyze_sentiment(chat_data['message']) 
+        
+        # Unpack both the score and the detected entities
+        score, entities = await analyze_message(chat_data['message']) 
         
         payload = {
             "username": chat_data["username"],
             "message": chat_data["message"],
             "score": score,
+            "entities": entities,  # Injecting the new NER array here
             "timestamp": chat_data["timestamp"]
         }
         
         status = "🟢 POSITIVE" if score > 0.4 else "🔴 NEGATIVE" if score < -0.4 else "⚪ NEUTRAL"
-        print(f"{chat_data['username']:<15} | {status:<8} | Score: {score:>6.2f} | {chat_data['message']}")
+        entities_display = f" | 🏷️ {entities}" if entities else ""
+        
+        # Updated terminal output to include detected topics
+        print(f"{chat_data['username']:<15} | {status:<8} | Score: {score:>6.2f}{entities_display} | {chat_data['message']}")
         
         await manager.broadcast(payload)
         chat_queue.task_done()

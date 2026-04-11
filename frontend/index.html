@@ -84,7 +84,15 @@
             border-bottom: 1px solid #334155;
             display: flex;
             justify-content: space-between;
+            align-items: flex-start;
             animation: slideIn 0.3s ease-out;
+        }
+        
+        .chat-content {
+            display: flex;
+            flex-direction: column;
+            flex-grow: 1;
+            padding-right: 15px;
         }
 
         .badge {
@@ -92,11 +100,30 @@
             border-radius: 12px;
             font-size: 0.8rem;
             font-weight: bold;
+            white-space: nowrap;
+            margin-top: 2px;
         }
 
         .badge.positive { background: rgba(16, 185, 129, 0.2); color: var(--positive-color); }
         .badge.negative { background: rgba(239, 68, 68, 0.2); color: var(--negative-color); }
         .badge.neutral { background: rgba(100, 116, 139, 0.2); color: var(--neutral-color); }
+        
+        /* 🆕 New Styles for Entity Tags */
+        .topic-tags {
+            margin-top: 6px;
+            display: flex;
+            gap: 6px;
+            flex-wrap: wrap;
+        }
+
+        .tag {
+            background-color: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 12px;
+            padding: 2px 8px;
+            font-size: 0.75rem;
+            color: #cbd5e1;
+        }
 
         @keyframes slideIn {
             from { opacity: 0; transform: translateY(10px); }
@@ -128,6 +155,7 @@
         document.getElementById('channel-name').innerText = `#${targetChannel}`;
 
         // 2. Connect to the WebSocket, passing the channel name to the Render server
+        // (Ensure this matches your local or deployed URL during testing)
         const ws = new window.WebSocket(`wss://vibxlins.onrender.com/ws/pulse?channel=${targetChannel}`);
 
         const chatFeed = document.getElementById('chat-feed');
@@ -136,7 +164,7 @@
 
         let recentScores = [];
         
-        // 🛡️ SECURITY (STEP A): Escape HTML characters to prevent XSS attacks
+        //  SECURITY (STEP A): Escape HTML characters to prevent XSS attacks
         function escapeHTML(str) {
             const div = document.createElement('div');
             div.textContent = str;
@@ -146,6 +174,7 @@
         ws.onmessage = function(event) {
             const data = JSON.parse(event.data);
             
+            // --- Vibe Meter Logic ---
             recentScores.push(data.score);
             if (recentScores.length > 10) recentScores.shift();
             
@@ -168,6 +197,7 @@
                 vibeScoreText.style.color = 'var(--text-main)';
             }
 
+            // --- Chat Message Logic ---
             const msgDiv = document.createElement('div');
             msgDiv.className = 'chat-message';
             
@@ -176,9 +206,24 @@
             if (data.score > 0.4) { badgeClass = 'positive'; badgeText = 'POSITIVE'; }
             else if (data.score < -0.4) { badgeClass = 'negative'; badgeText = 'NEGATIVE'; }
 
-            // 🛡️ SECURITY (STEP B): Wrapped data.username and data.message in escapeHTML()
+            //  Process Entities into HTML Tags
+            const topics = data.entities || [];
+            let tagsHtml = '';
+            if (topics.length > 0) {
+                tagsHtml = '<div class="topic-tags">';
+                topics.forEach(topic => {
+                    // Sanitize the topic text before injecting
+                    tagsHtml += `<span class="tag">🏷️ ${escapeHTML(topic)}</span>`; 
+                });
+                tagsHtml += '</div>';
+            }
+
+            // Assemble the final message block
             msgDiv.innerHTML = `
-                <span><strong>${escapeHTML(data.username)}</strong>: ${escapeHTML(data.message)}</span>
+                <div class="chat-content">
+                    <span><strong>${escapeHTML(data.username)}</strong>: ${escapeHTML(data.message)}</span>
+                    ${tagsHtml}
+                </div>
                 <span class="badge ${badgeClass}">${badgeText}</span>
             `;
             
