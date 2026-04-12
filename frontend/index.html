@@ -4,13 +4,14 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>VibxLinx Pulse</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         :root {
             --bg-color: #0f172a;
             --text-main: #f8fafc;
-            --positive-color: #10b981; /* Green */
-            --negative-color: #ef4444; /* Red */
-            --neutral-color: #64748b;  /* Gray */
+            --positive-color: #10b981; 
+            --negative-color: #ef4444; 
+            --neutral-color: #64748b;  
         }
 
         body {
@@ -24,6 +25,7 @@
             align-items: center;
             height: 100vh;
             overflow: hidden;
+            box-sizing: border-box;
         }
 
         .meter-container {
@@ -34,7 +36,8 @@
             padding: 20px;
             text-align: center;
             box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.5);
-            margin-bottom: 20px;
+            margin-bottom: 15px;
+            box-sizing: border-box;
         }
 
         .meter-bar {
@@ -68,6 +71,18 @@
             font-weight: normal;
         }
 
+        .chart-container {
+            width: 100%;
+            max-width: 600px;
+            height: 150px; 
+            background: #1e293b;
+            border-radius: 20px;
+            padding: 10px;
+            margin-bottom: 15px;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.5);
+            box-sizing: border-box;
+        }
+
         .chat-container {
             width: 100%;
             max-width: 600px;
@@ -77,6 +92,7 @@
             padding: 20px;
             overflow-y: auto;
             box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.5);
+            box-sizing: border-box;
         }
 
         .chat-message {
@@ -108,7 +124,6 @@
         .badge.negative { background: rgba(239, 68, 68, 0.2); color: var(--negative-color); }
         .badge.neutral { background: rgba(100, 116, 139, 0.2); color: var(--neutral-color); }
         
-        /* 🆕 New Styles for Entity Tags */
         .topic-tags {
             margin-top: 6px;
             display: flex;
@@ -141,22 +156,28 @@
         <div class="score-display" id="vibe-score">⚪ NEUTRAL (0.00)</div>
     </div>
 
+    <div class="chart-container">
+        <canvas id="liveTimelineChart"></canvas>
+    </div>
+
     <div class="chat-container" id="chat-feed">
     </div>
 
     <script>
-        // 1. Check the URL for a specific channel (e.g., ?channel=xqc)
         const urlParams = new URLSearchParams(window.location.search);
-
-        // If they didn't provide one, default to a 24/7 channel so the gauge doesn't break
         const targetChannel = urlParams.get('channel') || 'eslcs'; 
-
-        // Update the UI to show which channel we are monitoring
         document.getElementById('channel-name').innerText = `#${targetChannel}`;
 
-        // 2. Connect to the WebSocket, passing the channel name to the Render server
-        // (Ensure this matches your local or deployed URL during testing)
-        const ws = new window.WebSocket(`wss://vibxlins.onrender.com/ws/pulse?channel=${targetChannel}`);
+        // 🧠 --- Smart Connection Logic ---
+        // Detects if you are running this locally (127.0.0.1) or live on the internet
+        const isLocal = window.location.hostname === "127.0.0.1" || window.location.hostname === "localhost" || window.location.hostname === "";
+        
+        const wsProtocol = isLocal ? "ws" : "wss"; 
+        const backendDomain = isLocal ? "127.0.0.1:8000" : "vibxlins.onrender.com";
+        
+        const wsUrl = `${wsProtocol}://${backendDomain}/ws/pulse?channel=${targetChannel}`;
+        const ws = new window.WebSocket(wsUrl);
+        // --------------------------------
 
         const chatFeed = document.getElementById('chat-feed');
         const vibeFill = document.getElementById('vibe-fill');
@@ -164,7 +185,44 @@
 
         let recentScores = [];
         
-        //  SECURITY (STEP A): Escape HTML characters to prevent XSS attacks
+        // --- Live Chart Setup ---
+        const maxDataPoints = 40; 
+        const ctx = document.getElementById('liveTimelineChart').getContext('2d');
+        const liveChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: Array(maxDataPoints).fill(''), 
+                datasets: [{
+                    label: 'Sentiment Trend',
+                    data: Array(maxDataPoints).fill(0), 
+                    borderColor: '#3b82f6', 
+                    backgroundColor: 'rgba(59, 130, 246, 0.2)',
+                    borderWidth: 2,
+                    tension: 0.4, 
+                    fill: true,
+                    pointRadius: 0 
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                animation: { duration: 200 }, 
+                plugins: { legend: { display: false } }, 
+                scales: {
+                    x: { display: false }, 
+                    y: {
+                        type: 'linear',
+                        display: true,
+                        position: 'right',
+                        min: -1.0,
+                        max: 1.0,
+                        grid: { color: '#334155' },
+                        ticks: { color: '#94a3b8', font: { size: 10 } }
+                    }
+                }
+            }
+        });
+
         function escapeHTML(str) {
             const div = document.createElement('div');
             div.textContent = str;
@@ -174,30 +232,38 @@
         ws.onmessage = function(event) {
             const data = JSON.parse(event.data);
             
-            // --- Vibe Meter Logic ---
             recentScores.push(data.score);
             if (recentScores.length > 10) recentScores.shift();
             
             const avgScore = recentScores.reduce((a, b) => a + b, 0) / recentScores.length;
-            
             const percentage = ((avgScore + 1) / 2) * 100;
+            
             vibeFill.style.width = `${percentage}%`;
 
             if (avgScore > 0.2) {
                 vibeFill.style.backgroundColor = 'var(--positive-color)';
-                vibeScoreText.innerText = `🟢 POSITIVE (${avgScore.toFixed(2)})`;
+                vibeScoreText.innerText = ` POSITIVE (${avgScore.toFixed(2)})`;
                 vibeScoreText.style.color = 'var(--positive-color)';
+                liveChart.data.datasets[0].borderColor = '#10b981'; 
             } else if (avgScore < -0.2) {
                 vibeFill.style.backgroundColor = 'var(--negative-color)';
-                vibeScoreText.innerText = `🔴 NEGATIVE (${avgScore.toFixed(2)})`;
+                vibeScoreText.innerText = ` NEGATIVE (${avgScore.toFixed(2)})`;
                 vibeScoreText.style.color = 'var(--negative-color)';
+                liveChart.data.datasets[0].borderColor = '#ef4444'; 
             } else {
                 vibeFill.style.backgroundColor = 'var(--neutral-color)';
-                vibeScoreText.innerText = `⚪ NEUTRAL (${avgScore.toFixed(2)})`;
+                vibeScoreText.innerText = ` NEUTRAL (${avgScore.toFixed(2)})`;
                 vibeScoreText.style.color = 'var(--text-main)';
+                liveChart.data.datasets[0].borderColor = '#3b82f6'; 
             }
 
-            // --- Chat Message Logic ---
+            const chartData = liveChart.data.datasets[0].data;
+            chartData.push(data.score); 
+            if (chartData.length > maxDataPoints) {
+                chartData.shift(); 
+            }
+            liveChart.update(); 
+
             const msgDiv = document.createElement('div');
             msgDiv.className = 'chat-message';
             
@@ -206,19 +272,16 @@
             if (data.score > 0.4) { badgeClass = 'positive'; badgeText = 'POSITIVE'; }
             else if (data.score < -0.4) { badgeClass = 'negative'; badgeText = 'NEGATIVE'; }
 
-            //  Process Entities into HTML Tags
             const topics = data.entities || [];
             let tagsHtml = '';
             if (topics.length > 0) {
                 tagsHtml = '<div class="topic-tags">';
                 topics.forEach(topic => {
-                    // Sanitize the topic text before injecting
                     tagsHtml += `<span class="tag">🏷️ ${escapeHTML(topic)}</span>`; 
                 });
                 tagsHtml += '</div>';
             }
 
-            // Assemble the final message block
             msgDiv.innerHTML = `
                 <div class="chat-content">
                     <span><strong>${escapeHTML(data.username)}</strong>: ${escapeHTML(data.message)}</span>
@@ -233,8 +296,8 @@
             }
         };
 
-        ws.onopen = () => console.log(`Connected to VibeLine Engine 🟢 listening to #${targetChannel}`);
-        ws.onclose = () => console.log("Disconnected 🔴");
+        ws.onopen = () => console.log(`Connected to VibxLinx Engine listening to #${targetChannel}`);
+        ws.onclose = () => console.log("Disconnected");
     </script>
 </body>
 </html>
